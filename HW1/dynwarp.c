@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <math.h>
+#include <time.h>
 
 #define LINE_MAX 8192
 
@@ -147,7 +148,7 @@ double minVal(double a, double b){
    }
 }
 
-double DTW(Matrix *A, Matrix *B){
+double DTW(Matrix *A, Matrix *B, double *elapsed){
 
    int m = A->rows, p = B->rows;
    double (*D)[p] = calloc(m, sizeof *D);
@@ -162,6 +163,8 @@ double DTW(Matrix *A, Matrix *B){
       return -1;
    }
 
+   clock_t start_time = clock();
+
    for (int lv1 = 0; lv1 < A->rows; lv1++){
       for (int lv2 = 0; lv2 < B->rows; lv2++){
          dist[lv1][lv2] = norm(A, B, lv1, lv2);
@@ -172,7 +175,7 @@ double DTW(Matrix *A, Matrix *B){
    for (int lv1 = 1; lv1 < A->rows; lv1++){
       D[lv1][0] = dist[lv1][0]+ D[lv1-1][0];
    }
-   for (int lv1 = 0; lv1 < B->rows; lv1++){
+   for (int lv1 = 1; lv1 < B->rows; lv1++){
       D[0][lv1] = dist[0][lv1] + D[0][lv1-1];
    }
    for(int lv1 = 1; lv1 < A->rows; lv1++){
@@ -181,7 +184,10 @@ double DTW(Matrix *A, Matrix *B){
       }
    }
 
+   clock_t end_time = clock();
+
    cost = D[A->rows-1][B->rows-1];
+   *elapsed = (double)(end_time - start_time) / CLOCKS_PER_SEC;
 
    free(D);
    free(dist);
@@ -193,6 +199,7 @@ int main(int argc, char *argv[]){
 
 
    double alCost = 0;
+   double tTime = 0;
 
    if (argc < 2){
 
@@ -227,9 +234,10 @@ int main(int argc, char *argv[]){
 
    //printf("A is %dx%d, B is %dx%d\n", A.rows, A.cols, B.rows, B.cols);
 
-   alCost = DTW(&A, &B);
+   alCost = DTW(&A, &B, &tTime);
 
-   printf("alignment cost: %f\n", alCost);
+   printf("The Final Cost is: %f\n", alCost);
+   printf("The Total Completion time (ms) is: %f\n", tTime*1000);
 
    free(A.data);
    free(B.data);
