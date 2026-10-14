@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <math.h>
 
 #define LINE_MAX 8192
 
@@ -120,8 +121,78 @@ int load_mats(FILE *inpf, Matrix *A, Matrix *B){
 }
 
 
+double norm(Matrix *A, Matrix *B, int aind, int bind){
+
+   double sum = 0;
+   double tempA, tempB;
+
+   for(int lv1 = 0; lv1 < A->cols; lv1++){
+      tempA = A -> data[aind * A->cols + lv1];
+      tempB = B -> data[bind * B->cols + lv1];
+
+      sum += (tempA - tempB)*(tempA - tempB);
+   }
+
+   return sqrt(sum);
+
+}
+
+
+double minVal(double a, double b){
+   if(a<b){
+      return a;
+   }
+   else{
+      return b;
+   }
+}
+
+double DTW(Matrix *A, Matrix *B){
+
+   int m = A->rows, p = B->rows;
+   double (*D)[p] = calloc(m, sizeof *D);
+   double (*dist)[p] = calloc(m, sizeof *dist);
+
+   double cost = 0;
+
+   if (D == NULL || dist == NULL){
+      perror("calloc");
+      free(D);
+      free(dist);
+      return -1;
+   }
+
+   for (int lv1 = 0; lv1 < A->rows; lv1++){
+      for (int lv2 = 0; lv2 < B->rows; lv2++){
+         dist[lv1][lv2] = norm(A, B, lv1, lv2);
+      }
+   }
+   D[0][0] = dist[0][0];
+
+   for (int lv1 = 1; lv1 < A->rows; lv1++){
+      D[lv1][0] = dist[lv1][0]+ D[lv1-1][0];
+   }
+   for (int lv1 = 0; lv1 < B->rows; lv1++){
+      D[0][lv1] = dist[0][lv1] + D[0][lv1-1];
+   }
+   for(int lv1 = 1; lv1 < A->rows; lv1++){
+      for(int lv2 = 1; lv2 < B->rows; lv2++){
+         D[lv1][lv2] = dist[lv1][lv2] + minVal(minVal(D[lv1-1][lv2], D[lv1][lv2-1]), D[lv1-1][lv2-1]);
+      }
+   }
+
+   cost = D[A->rows-1][B->rows-1];
+
+   free(D);
+   free(dist);
+
+   return cost;
+}
+
 int main(int argc, char *argv[]){
 
+
+   double alCost = 0;
 
    if (argc < 2){
 
@@ -154,7 +225,11 @@ int main(int argc, char *argv[]){
       return 1;
    }
 
-   printf("A is %dx%d, B is %dx%d\n", A.rows, A.cols, B.rows, B.cols);
+   //printf("A is %dx%d, B is %dx%d\n", A.rows, A.cols, B.rows, B.cols);
+
+   alCost = DTW(&A, &B);
+
+   printf("alignment cost: %f\n", alCost);
 
    free(A.data);
    free(B.data);
