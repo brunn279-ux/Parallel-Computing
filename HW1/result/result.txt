@@ -1,1 +1,106 @@
-Setup Error: Missing command: valgrind
+Selected test index 2 (visible, non-speedup) for memory leak check
+✅ Compilation successful!
+=== Testing tests/testin_0.txt ===
+--- Running serial version ---
+Serial baseline: cost=0.000000, time=0.006ms
+--- Running 1 threads (main run) ---
+Completed case on tests/testin_0.txt with 1 threads
+--- Running 2 threads (main run) ---
+Completed case on tests/testin_0.txt with 2 threads
+--- Running 4 threads (main run) ---
+Completed case on tests/testin_0.txt with 4 threads
+--- Running 8 threads (main run) ---
+Completed case on tests/testin_0.txt with 8 threads
+--- Running 16 threads (main run) ---
+Completed case on tests/testin_0.txt with 16 threads
+--- Running 32 threads (main run) ---
+Completed case on tests/testin_0.txt with 32 threads
+--- Running 64 threads (main run) ---
+Completed case on tests/testin_0.txt with 64 threads
+=== Testing tests/testin_1.txt ===
+--- Running serial version ---
+Serial baseline: cost=2.000000, time=0.010ms
+--- Running 1 threads (main run) ---
+Completed case on tests/testin_1.txt with 1 threads
+--- Running 2 threads (main run) ---
+Completed case on tests/testin_1.txt with 2 threads
+--- Running 4 threads (main run) ---
+Completed case on tests/testin_1.txt with 4 threads
+--- Running 8 threads (main run) ---
+Completed case on tests/testin_1.txt with 8 threads
+--- Running 16 threads (main run) ---
+Completed case on tests/testin_1.txt with 16 threads
+--- Running 32 threads (main run) ---
+Completed case on tests/testin_1.txt with 32 threads
+--- Running 64 threads (main run) ---
+Completed case on tests/testin_1.txt with 64 threads
+=== Testing tests/testin_2.txt ===
+--- Running serial version ---
+Serial baseline: cost=2.828427, time=0.027ms
+--- Running 1 threads (main run) ---
+--- Running 1 threads (valgrind) ---
+Completed case on tests/testin_2.txt with 1 threads
+--- Running 2 threads (main run) ---
+Completed case on tests/testin_2.txt with 2 threads
+--- Running 4 threads (main run) ---
+Completed case on tests/testin_2.txt with 4 threads
+--- Running 8 threads (main run) ---
+Completed case on tests/testin_2.txt with 8 threads
+--- Running 16 threads (main run) ---
+Completed case on tests/testin_2.txt with 16 threads
+--- Running 32 threads (main run) ---
+Completed case on tests/testin_2.txt with 32 threads
+--- Running 64 threads (main run) ---
+Completed case on tests/testin_2.txt with 64 threads
+=== Testing tests/testin_3.txt ===
+--- Running serial version ---
+Serial baseline: cost=2.000000, time=0.011ms
+--- Running 1 threads (main run) ---
+Completed case on tests/testin_3.txt with 1 threads
+--- Running 2 threads (main run) ---
+Completed case on tests/testin_3.txt with 2 threads
+--- Running 4 threads (main run) ---
+Completed case on tests/testin_3.txt with 4 threads
+--- Running 8 threads (main run) ---
+Completed case on tests/testin_3.txt with 8 threads
+--- Running 16 threads (main run) ---
+Completed case on tests/testin_3.txt with 16 threads
+--- Running 32 threads (main run) ---
+Completed case on tests/testin_3.txt with 32 threads
+--- Running 64 threads (main run) ---
+Completed case on tests/testin_3.txt with 64 threads
+=== Testing tests/testin_4.txt ===
+--- Running serial version ---
+Serial baseline: cost=2.828427, time=0.027ms
+--- Running 1 threads (main run) ---
+Completed case on tests/testin_4.txt with 1 threads
+--- Running 2 threads (main run) ---
+Completed case on tests/testin_4.txt with 2 threads
+--- Running 4 threads (main run) ---
+Completed case on tests/testin_4.txt with 4 threads
+--- Running 8 threads (main run) ---
+Completed case on tests/testin_4.txt with 8 threads
+--- Running 16 threads (main run) ---
+Completed case on tests/testin_4.txt with 16 threads
+--- Running 32 threads (main run) ---
+Completed case on tests/testin_4.txt with 32 threads
+--- Running 64 threads (main run) ---
+Completed case on tests/testin_4.txt with 64 threads
+=== Testing tests/testin_5.txt ===
+--- Running serial version ---
+Serial baseline: cost=139813.778253, time=20274.652ms
+--- Running 1 threads (main run) ---
+Completed case on tests/testin_5.txt with 1 threads
+--- Running 2 threads (main run) ---
+Completed case on tests/testin_5.txt with 2 threads
+--- Running 4 threads (main run) ---
+Completed case on tests/testin_5.txt with 4 threads
+--- Running 8 threads (main run) ---
+Completed case on tests/testin_5.txt with 8 threads
+--- Running 16 threads (main run) ---
+Completed case on tests/testin_5.txt with 16 threads
+--- Running 32 threads (main run) ---
+Completed case on tests/testin_5.txt with 32 threads
+--- Running 64 threads (main run) ---
+Completed case on tests/testin_5.txt with 64 threads
+Autograder completed successfully
