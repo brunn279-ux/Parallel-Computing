@@ -8,6 +8,9 @@
 
 
 /* ---------- Matrix reading from file (use streaming for very large files >500MB) ---------- */
+static inline int blk_size(int len, int q, int t) { return len / q + (t < len % q); }
+static inline int blk_off (int len, int q, int t) { return t * (len / q) + (t < len % q ? t : len % q); }
+static inline int blk_max (int len, int q)        { return (len + q - 1) / q; }
 void read_matrix_streaming(const char *filename, double **A, double **B, int *n, int *m, int *p) {
     FILE *fp = fopen(filename, "r");
     if (!fp) { perror("fopen"); MPI_Abort(MPI_COMM_WORLD, 1); }
@@ -34,7 +37,7 @@ void read_matrix_streaming(const char *filename, double **A, double **B, int *n,
     }
 
     if(colsA != rowsB){
-       perror("cant do those dimensions bucko");
+       fprintf(stderr, "cant do those dimensions bucko");
        MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
@@ -43,8 +46,8 @@ void read_matrix_streaming(const char *filename, double **A, double **B, int *n,
     *n = rowsA;
     *m = colsA;
     *p = colsB;
-    *A = malloc(rowsA * colsA * sizeof(double));
-    *B = malloc(rowsB * colsB * sizeof(double));
+    *A = malloc((size_t)rowsA * colsA * sizeof(double));
+    *B = malloc((size_t)rowsB * colsB * sizeof(double));
 
     int idxA = 0, idxB = 0;
     readingA = readingB = 0;
@@ -70,11 +73,11 @@ void read_matrix_streaming(const char *filename, double **A, double **B, int *n,
 
 
 /* ---------- Local matrix multiplication ---------- */
-void MatrixMultiply(int nlocal, double *A, double *B, double *C) {
-    for (int i = 0; i < nlocal; i++)
-        for (int j = 0; j < nlocal; j++)
-            for (int k = 0; k < nlocal; k++)
-                C[i*nlocal + j] += A[i*nlocal + k] * B[k*nlocal + j];
+void MatrixMultiply(int nl, int ml, int pl, double *A, int lda, double *B, int ldb,  double *C, int ldc) {
+    for (int lv1 = 0; lv1 < nl; lv1++)
+        for (int lv2 = 0; lv2 < ml; lv2++)
+            for (int lv3 = 0; lv3 < pl; lv3++)
+                C[(size_t)lv1*ldc + lv2] += A[(size_t)lv1*lda + lv3] * B[(size_t)lv3*ldb + lv2];
 }
 
 /* ---------- Write matrix to output file ---------- */
@@ -106,29 +109,31 @@ void PrintMatrix(int n, int m, double* mat) {
 }
 
 /* ---------- Create Cartesian grid communicator ---------- */
-MPI_Comm create_cartesian_grid(MPI_Comm base_comm, int *nlocal_out, int n)
+MPI_Comm create_cartesian_grid(MPI_Comm base_comm, int *q_out)
 {
-    int npes;
+    int npes, rank;
     MPI_Comm_size(base_comm, &npes);
+    MPI_Comm_rank(base_comm, &rank);
 
     int dims[2] = {0, 0};
     MPI_Dims_create(npes, 2, dims);
+    int q = (int)(sqrt((double)npes) + 0.5);
+    if (q * q != npes) {
+        if (rank == 0)
+            fprintf(stderr, "Number of processes (%d) must be a perfect square\n", npes);
+        MPI_Abort(base_comm, 1);
+    }
 
     int periods[2] = {1, 1};  /* wraparound grid for Cannon */
     MPI_Comm grid;
-    MPI_Cart_create(base_comm, 2, dims, periods, 1, &grid);
+    MPI_Cart_create(base_comm, 2, dims, periods, 0, &grid);
 
-    int nlocal = n / dims[0];
-    if (nlocal_out)
-        *nlocal_out = nlocal;
-
+    *q_out = q;
     return grid;
 }
 
 /* ---------- Scatter global n×n matrix into nlocal×nlocal blocks ---------- */
-void scatter_2d_blocks(double *A_global, double *local,
-                       int n, MPI_Comm grid)
-{
+void scatter_2d_blocks(double *A_global, double *local, int rows, int cols, int rbm, int cbm, int q, MPI_Comm grid){
     int npes, rank;
     MPI_Comm_size(grid, &npes);
     MPI_Comm_rank(grid, &rank);
@@ -141,132 +146,83 @@ void scatter_2d_blocks(double *A_global, double *local,
         for (int r = 0; r < npes; r++) {
             int rc[2];
             MPI_Cart_coords(grid, r, 2, rc);
+            int br = blk_size(rows, q, rc[0]), bc = blk_size(cols, q, rc[1]);
+            int ro = blk_off (rows, q, rc[0]), co = blk_off (cols, q, rc[1]);
 
-            int sizes[2]    = { n,      n      };
-            int subsizes[2] = { nlocal, nlocal };
-            int starts[2]   = { rc[0]*nlocal, rc[1]*nlocal };
+            double *dst = (r == 0) ? local : buf;
+            memset(dst, 0, bufsz * sizeof(double));
+            for (int i = 0; i < br; i++)
+                memcpy(dst + (size_t)i * cbm, G + (size_t)(ro + i) * cols + co, bc * sizeof(double));
 
-            MPI_Datatype sub;
-            MPI_Type_create_subarray(2, sizes, subsizes, starts,
-                                     MPI_ORDER_C, MPI_DOUBLE, &sub);
-            MPI_Type_commit(&sub);
-
-            if (r == 0) {
-                for (int i = 0; i < nlocal; i++) {
-                    const double *src = A_global + (starts[0]+i)*n + starts[1];
-                    double *dst = local + i*nlocal;
-                    memcpy(dst, src, nlocal * sizeof(double));
-                }
-            } else {
-                MPI_Send(A_global, 1, sub, r, 999, grid);
-            }
-            MPI_Type_free(&sub);
+            if (r != 0)
+                MPI_Send(buf, (int)bufsz, MPI_DOUBLE, r, 999, grid);
         }
+        free(buf);
     } else {
-        MPI_Recv(local, nlocal*nlocal, MPI_DOUBLE, 0, 999, grid, MPI_STATUS_IGNORE);
+        MPI_Recv(local, (int)bufsz, MPI_DOUBLE, 0, 999, grid, MPI_STATUS_IGNORE);
     }
 }
 
 /* ---------- Gather nlocal×nlocal blocks back into global n×n matrix ---------- */
-void gather_2d_blocks(double *local, double *C_global,
-                      int n, MPI_Comm grid)
-{
+void gather_2d_blocks(double *local, double *C_global, int rows, int cols, int rbm, int cbm, int q, MPI_Comm grid){
     int npes, rank;
     MPI_Comm_size(grid, &npes);
     MPI_Comm_rank(grid, &rank);
-
-    int dims[2], coords[2];
-    MPI_Cart_get(grid, 2, dims, (int[]){1,1}, coords);
-    int nlocal = n / dims[0];
+    MPI_Comm_size(grid, &npes);
+    size_t bufsz = (size_t)rbm * cbm;
 
     if (rank == 0) {
+        double *buf = malloc(bufsz * sizeof(double));
         for (int r = 0; r < npes; r++) {
             int rc[2];
             MPI_Cart_coords(grid, r, 2, rc);
+            int br = blk_size(rows, q, rc[0]), bc = blk_size(cols, q, rc[1]);
+            int ro = blk_off (rows, q, rc[0]), co = blk_off (cols, q, rc[1]);
 
-            int sizes[2]    = { n,      n      };
-            int subsizes[2] = { nlocal, nlocal };
-            int starts[2]   = { rc[0]*nlocal, rc[1]*nlocal };
-
-            MPI_Datatype sub;
-            MPI_Type_create_subarray(2, sizes, subsizes, starts,
-                                     MPI_ORDER_C, MPI_DOUBLE, &sub);
-            MPI_Type_commit(&sub);
-
-            if (r == 0) {
-                for (int i = 0; i < nlocal; i++) {
-                    double *dst = C_global + (starts[0]+i)*n + starts[1];
-                    const double *src = local + i*nlocal;
-                    memcpy(dst, src, nlocal * sizeof(double));
-                }
-            } else {
-                MPI_Recv(C_global, 1, sub, r, 1999, grid, MPI_STATUS_IGNORE);
+            const double *src = local;
+            if (r != 0) {
+                MPI_Recv(buf, (int)bufsz, MPI_DOUBLE, r, 1999, grid, MPI_STATUS_IGNORE);
+                src = buf;
             }
-            MPI_Type_free(&sub);
+            for (int i = 0; i < br; i++)
+                memcpy(G + (size_t)(ro + i) * cols + co, src + (size_t)i * cbm, bc * sizeof(double));
         }
+        free(buf);
     } else {
-        MPI_Send(local, nlocal*nlocal, MPI_DOUBLE, 0, 1999, grid);
+        MPI_Send(local, (int)bufsz, MPI_DOUBLE, 0, 1999, grid);
     }
 }
 
-void MatrixMatrixMultiply(int n, double *a, double *b, double *c, MPI_Comm grid)
+void MatrixMatrixMultiply(int n, int m, int p, double *a, double *b, double *c, MPI_Comm grid)
 {
-    int i;
-    int nlocal;
-    int npes, myrank, mycoords[2];
-    int dims[2], periods[2];
-    int uprank, downrank, leftrank, rightrank;
-    int shiftsource, shiftdest;
-    MPI_Status status;
+    int dims[2], periods[2], coords[2];
+    MPI_Cart_get(grid, 2, dims, periods, coords);
+    int q = dims[0];
+    int i = coords[0], j = coords[1];
 
-    /* Query communicator info from the existing grid */
-    MPI_Comm_size(grid, &npes);
-    MPI_Comm_rank(grid, &myrank);
-    MPI_Cart_get(grid, 2, dims, periods, mycoords);
+    int nb = blk_max(n, q), mb = blk_max(m, q), pb = blk_max(p, q);  /* padded block dims */
+    int ni = blk_size(n, q, i);   /* my rows of A and C   */
+    int pj = blk_size(p, q, j);   /* my cols of B and C   */
 
-    nlocal = n / dims[0];
+    int left, right, up, down, src, dst;
+    MPI_Cart_shift(grid, 1, +1, &left, &right);   /* A moves left  */
+    MPI_Cart_shift(grid, 0, +1, &up,   &down);    /* B moves up    */
 
-    /* Determine neighbors for shifts */
-    MPI_Cart_shift(grid, 1, +1, &leftrank, &rightrank);  // left/right along columns
-    MPI_Cart_shift(grid, 0, +1, &uprank, &downrank);     // up/down along rows
+    /* Initial skew: A row i left by i, B column j up by j */
+    MPI_Cart_shift(grid, 1, -i, &src, &dst);
+    MPI_Sendrecv_replace(a, nb * mb, MPI_DOUBLE, dst, 100, src, 100, grid, MPI_STATUS_IGNORE);
+    MPI_Cart_shift(grid, 0, -j, &src, &dst);
+    MPI_Sendrecv_replace(b, mb * pb, MPI_DOUBLE, dst, 200, src, 200, grid, MPI_STATUS_IGNORE);
 
-    /* ---------- Initial alignment ---------- */
-    MPI_Cart_shift(grid, 1, -mycoords[0], &shiftsource, &shiftdest);
-    MPI_Sendrecv_replace(a, nlocal * nlocal, MPI_DOUBLE,
-                         shiftdest, 100,
-                         shiftsource, 100, grid, &status);
+    for (int s = 0; s < q; s++) {
+        int kidx = (i + j + s) % q;          /* k-block currently held (both A and B) */
+        int kc   = blk_size(m, q, kidx);     /* its true extent */
 
-    MPI_Cart_shift(grid, 0, -mycoords[1], &shiftsource, &shiftdest);
-    MPI_Sendrecv_replace(b, nlocal * nlocal, MPI_DOUBLE,
-                         shiftdest, 200,
-                         shiftsource, 200, grid, &status);
+        local_multiply(ni, pj, kc, a, mb, b, pb, c, pb);
 
-
-    /* ---------- Main Cannon loop ---------- */
-    for (i = 0; i < dims[0]; i++) {
-        MatrixMultiply(nlocal, a, b, c);
-
-        /* Rotate A left */
-        MPI_Sendrecv_replace(a, nlocal * nlocal, MPI_DOUBLE,
-                             leftrank, 1000 + i,
-                             rightrank, 1000 + i, grid, &status);
-
-        /* Rotate B up */
-        MPI_Sendrecv_replace(b, nlocal * nlocal, MPI_DOUBLE,
-                             uprank, 2000 + i,
-                             downrank, 2000 + i, grid, &status);
+        MPI_Sendrecv_replace(a, nb * mb, MPI_DOUBLE, left, 1000 + s, right, 1000 + s, grid, MPI_STATUS_IGNORE);
+        MPI_Sendrecv_replace(b, mb * pb, MPI_DOUBLE, up,   2000 + s, down,  2000 + s, grid, MPI_STATUS_IGNORE);
     }
-
-    /* ---------- Restore original distribution ---------- */
-    MPI_Cart_shift(grid, 1, +mycoords[0], &shiftsource, &shiftdest);
-    MPI_Sendrecv_replace(a, nlocal * nlocal, MPI_DOUBLE,
-                         shiftdest, 300,
-                         shiftsource, 300, grid, &status);
-
-    MPI_Cart_shift(grid, 0, +mycoords[1], &shiftsource, &shiftdest);
-    MPI_Sendrecv_replace(b, nlocal * nlocal, MPI_DOUBLE,
-                         shiftdest, 400,
-                         shiftsource, 400, grid, &status);
 }
 
 
@@ -289,29 +245,31 @@ int main(int argc, char *argv[]) {
     const char *input_file = argv[1];
     const char *output_file = argv[2];
 
-    double *A = NULL, *B = NULL, *C = NULL, *C_full = NULL;
-    int n, m, p, nlocal;
+    double *A = NULL, *B = NULL, *C_full = NULL;
+    int dimsnmp[3] = {0, 0, 0};
 
     if (rank == 0)
-        read_matrix_streaming(input_file, &A, &B, &n, &m, &p);
+        read_matrix_streaming(input_file, &A, &B, &dimsnmp[0], &dimsnmp[1], &dimsnmp[2]);
 
-    MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(dimsnmp, 3, MPI_INT, 0, MPI_COMM_WORLD);
+    int n = dimsnmp[0], m = dimsnmp[1], p = dimsnmp[2];
 
-    /* Create Cartesian grid once and reuse */
-    MPI_Comm grid = create_cartesian_grid(MPI_COMM_WORLD, &nlocal, n);
+    int q;
+    MPI_Comm grid = create_cartesian_grid(MPI_COMM_WORLD, &q);
 
-    double *a_local = malloc(nlocal * nlocal * sizeof(double));
-    double *b_local = malloc(nlocal * nlocal * sizeof(double));
-    C = calloc(nlocal * nlocal, sizeof(double));
+    int nb = blk_max(n, q), mb = blk_max(m, q), pb = blk_max(p, q);
 
-    /* Proper 2D scatter */
-    scatter_2d_blocks(A, a_local, n, grid);
-    scatter_2d_blocks(B, b_local, n, grid);
+    double *a_local = calloc((size_t)nb * mb, sizeof(double));
+    double *b_local = calloc((size_t)mb * pb, sizeof(double));
+    double *c_local = calloc((size_t)nb * pb, sizeof(double));
+
+    scatter_2d_blocks(A, n, m, a_local, nb, mb, q, grid);
+    scatter_2d_blocks(B, m, p, b_local, mb, pb, q, grid);
 
     double start, end, elapsed;
     start = MPI_Wtime();
     /* Run Cannon’s algorithm */
-    MatrixMatrixMultiply(n, a_local, b_local, C, grid);
+    MatrixMatrixMultiply(n, m, p, a_local, b_local, c_local, grid);
     end = MPI_Wtime();
     if (rank == 0) {
         elapsed = end - start;
@@ -323,14 +281,14 @@ int main(int argc, char *argv[]) {
         C_full = malloc(n * p * sizeof(double));
     gather_2d_blocks(C, C_full, n, grid);
 
-    if (rank == 0){
+    /*if (rank == 0){
         printf("A\n");
         PrintMatrix(n, m, A);
         printf("B\n");
         PrintMatrix(m, p, B);
         printf("C\n");
         PrintMatrix(n, p, C_full);
-    }
+    }*/
     /* Write result to output file */
     if (rank == 0) {
         write_matrix_to_file(output_file, C_full, n, p);
@@ -343,7 +301,7 @@ int main(int argc, char *argv[]) {
     MPI_Comm_free(&grid);
     free(a_local);
     free(b_local);
-    free(C);
+    free(c_local);
 
     MPI_Finalize();
     return 0;
