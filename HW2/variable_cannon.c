@@ -8,7 +8,7 @@
 
 
 /* ---------- Matrix reading from file (use streaming for very large files >500MB) ---------- */
-void read_matrix_streaming(const char *filename, double **A, double **B, int *n) {
+void read_matrix_streaming(const char *filename, double **A, double **B, int *n, int *m, int *p) {
     FILE *fp = fopen(filename, "r");
     if (!fp) { perror("fopen"); MPI_Abort(MPI_COMM_WORLD, 1); }
 
@@ -33,9 +33,16 @@ void read_matrix_streaming(const char *filename, double **A, double **B, int *n)
         else if (readingB) { rowsB++; colsB = count; }
     }
 
+    if(colsA != rowsB){
+       perror("cant do those dimensions bucko");
+       MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
     rewind(fp);
 
     *n = rowsA;
+    *m = colsA;
+    *p = colsB;
     *A = malloc(rowsA * colsA * sizeof(double));
     *B = malloc(rowsB * colsB * sizeof(double));
 
@@ -71,7 +78,7 @@ void MatrixMultiply(int nlocal, double *A, double *B, double *C) {
 }
 
 /* ---------- Write matrix to output file ---------- */
-void write_matrix_to_file(const char *filename, double *C, int n) {
+void write_matrix_to_file(const char *filename, double *C, int n, int p) {
     FILE *fp = fopen(filename, "w");
     if (!fp) {
         fprintf(stderr, "Error: Cannot open output file %s\n", filename);
@@ -79,7 +86,7 @@ void write_matrix_to_file(const char *filename, double *C, int n) {
     }
 
     for (int i = 0; i < n; i++) {
-        for (int j = 0; j < n; j++) {
+        for (int j = 0; j < p; j++) {
             fprintf(fp, "%.4f", C[i * n + j]);
             if (j < n - 1) fprintf(fp, " ");
         }
@@ -283,16 +290,16 @@ int main(int argc, char *argv[]) {
     const char *output_file = argv[2];
 
     double *A = NULL, *B = NULL, *C = NULL, *C_full = NULL;
-    int n, nlocal;
+    int n, m, p, nlocal;
 
     if (rank == 0)
-        read_matrix_streaming(input_file, &A, &B, &n);
+        read_matrix_streaming(input_file, &A, &B, &n, &m, &p);
 
     MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
     /* Create Cartesian grid once and reuse */
     MPI_Comm grid = create_cartesian_grid(MPI_COMM_WORLD, &nlocal, n);
-    
+
     double *a_local = malloc(nlocal * nlocal * sizeof(double));
     double *b_local = malloc(nlocal * nlocal * sizeof(double));
     C = calloc(nlocal * nlocal, sizeof(double));
@@ -313,12 +320,20 @@ int main(int argc, char *argv[]) {
 
     /* Gather result back */
     if (rank == 0)
-        C_full = malloc(n * n * sizeof(double));
+        C_full = malloc(n * p * sizeof(double));
     gather_2d_blocks(C, C_full, n, grid);
 
+    if (rank == 0){
+        printf("A\n");
+        PrintMatrix(n, m, A);
+        printf("B\n");
+        PrintMatrix(m, p, B);
+        printf("C\n");
+        PrintMatrix(n, p, C_full);
+    }
     /* Write result to output file */
     if (rank == 0) {
-        write_matrix_to_file(output_file, C_full, n);
+        write_matrix_to_file(output_file, C_full, n, p);
         printf("Result written to %s\n", output_file);
         free(A);
         free(B);
