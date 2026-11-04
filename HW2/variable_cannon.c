@@ -74,10 +74,16 @@ void read_matrix_streaming(const char *filename, double **A, double **B, int *n,
 
 /* ---------- Local matrix multiplication ---------- */
 void MatrixMultiply(int nl, int ml, int pl, double *A, int lda, double *B, int ldb,  double *C, int ldc) {
-    for (int lv1 = 0; lv1 < nl; lv1++)
-        for (int lv2 = 0; lv2 < ml; lv2++)
-            for (int lv3 = 0; lv3 < pl; lv3++)
-                C[(size_t)lv1*ldc + lv2] += A[(size_t)lv1*lda + lv3] * B[(size_t)lv3*ldb + lv2];
+    for (int lv1 = 0; lv1 < nl; lv1++) {
+        const double *Ai = A + (size_t)lv1 * lda;
+        double *Ci = C + (size_t)lv1 * ldc;
+        for (int lv3 = 0; lv3 < pl; lv3++) {
+            double a = Ai[lv3];
+            const double *Bk = B + (size_t)lv3 * ldb;
+            for (int lv2 = 0; lv2 < ml; lv2++)
+                Ci[lv2] += a * Bk[lv2];
+        }
+    }
 }
 
 /* ---------- Write matrix to output file ---------- */
@@ -90,8 +96,8 @@ void write_matrix_to_file(const char *filename, double *C, int n, int p) {
 
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < p; j++) {
-            fprintf(fp, "%.4f", C[i * n + j]);
-            if (j < n - 1) fprintf(fp, " ");
+            fprintf(fp, "%.4f", C[i * p + j]);
+            if (j < p - 1) fprintf(fp, " ");
         }
         fprintf(fp, "\n");
     }
@@ -138,11 +144,10 @@ void scatter_2d_blocks(double *A_global, double *local, int rows, int cols, int 
     MPI_Comm_size(grid, &npes);
     MPI_Comm_rank(grid, &rank);
 
-    int dims[2], coords[2];
-    MPI_Cart_get(grid, 2, dims, (int[]){1,1}, coords);
-    int nlocal = n / dims[0];
+    size_t bufsz = (size_t)rbm * cbm;
 
     if (rank == 0) {
+        double *buf = malloc(bufsz * sizeof(double));
         for (int r = 0; r < npes; r++) {
             int rc[2];
             MPI_Cart_coords(grid, r, 2, rc);
@@ -152,7 +157,7 @@ void scatter_2d_blocks(double *A_global, double *local, int rows, int cols, int 
             double *dst = (r == 0) ? local : buf;
             memset(dst, 0, bufsz * sizeof(double));
             for (int i = 0; i < br; i++)
-                memcpy(dst + (size_t)i * cbm, G + (size_t)(ro + i) * cols + co, bc * sizeof(double));
+                memcpy(dst + (size_t)i * cbm, A_global + (size_t)(ro + i) * cols + co, bc * sizeof(double));
 
             if (r != 0)
                 MPI_Send(buf, (int)bufsz, MPI_DOUBLE, r, 999, grid);
@@ -168,7 +173,6 @@ void gather_2d_blocks(double *local, double *C_global, int rows, int cols, int r
     int npes, rank;
     MPI_Comm_size(grid, &npes);
     MPI_Comm_rank(grid, &rank);
-    MPI_Comm_size(grid, &npes);
     size_t bufsz = (size_t)rbm * cbm;
 
     if (rank == 0) {
@@ -185,7 +189,7 @@ void gather_2d_blocks(double *local, double *C_global, int rows, int cols, int r
                 src = buf;
             }
             for (int i = 0; i < br; i++)
-                memcpy(G + (size_t)(ro + i) * cols + co, src + (size_t)i * cbm, bc * sizeof(double));
+                memcpy(C_global + (size_t)(ro + i) * cols + co, src + (size_t)i * cbm, bc * sizeof(double));
         }
         free(buf);
     } else {
@@ -218,7 +222,7 @@ void MatrixMatrixMultiply(int n, int m, int p, double *a, double *b, double *c, 
         int kidx = (i + j + s) % q;          /* k-block currently held (both A and B) */
         int kc   = blk_size(m, q, kidx);     /* its true extent */
 
-        local_multiply(ni, pj, kc, a, mb, b, pb, c, pb);
+        MatrixMultiply(ni, pj, kc, a, mb, b, pb, c, pb);
 
         MPI_Sendrecv_replace(a, nb * mb, MPI_DOUBLE, left, 1000 + s, right, 1000 + s, grid, MPI_STATUS_IGNORE);
         MPI_Sendrecv_replace(b, mb * pb, MPI_DOUBLE, up,   2000 + s, down,  2000 + s, grid, MPI_STATUS_IGNORE);
@@ -263,8 +267,8 @@ int main(int argc, char *argv[]) {
     double *b_local = calloc((size_t)mb * pb, sizeof(double));
     double *c_local = calloc((size_t)nb * pb, sizeof(double));
 
-    scatter_2d_blocks(A, n, m, a_local, nb, mb, q, grid);
-    scatter_2d_blocks(B, m, p, b_local, mb, pb, q, grid);
+    scatter_2d_blocks(A, a_local, n, m, nb, mb, q, grid);
+    scatter_2d_blocks(B, b_local, m, p, mb, pb, q, grid);
 
     double start, end, elapsed;
     start = MPI_Wtime();
@@ -278,8 +282,8 @@ int main(int argc, char *argv[]) {
 
     /* Gather result back */
     if (rank == 0)
-        C_full = malloc(n * p * sizeof(double));
-    gather_2d_blocks(C, C_full, n, grid);
+        C_full = malloc((size_t)n * p * sizeof(double));
+    gather_2d_blocks(c_local, C_full, n, p, nb, pb, q, grid);
 
     /*if (rank == 0){
         printf("A\n");
